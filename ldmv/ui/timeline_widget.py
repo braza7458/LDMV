@@ -8,6 +8,8 @@ Interactions (outil Sélection) :
     glisser = ROLL EDIT (Partie 3)
   - survol d'un bord libre de clip   -> curseur ↔, glisser = rognage
 Outil Ciseau (touche B) : clic sur un clip = coupe à cet endroit.
+Mode Silences : une barre orange horizontale sur la piste principale ;
+  la faire glisser règle le seuil, tout ce qui reste dessous sera coupé.
 """
 
 from __future__ import annotations
@@ -21,14 +23,14 @@ from PySide6.QtWidgets import QWidget
 
 from ldmv.core.edits import Editor
 from ldmv.core.model import Clip, Track
-from ldmv.core.silence import Interval
+from ldmv.core.silence import Interval, db_to_display, display_to_db
 from ldmv.core.timecode import US_PER_SECOND, format_ruler, format_timecode
 from ldmv.ui.icons import scissors_cursor_pixmap
 
 LEFT_PAD = 16
 RULER_H = 30
 TOP_GAP = 60
-TRACK_H = 74
+TRACK_H = 96
 TRACK_GAP = 10
 CLIP_HEADER_H = 18
 EDGE_PX = 6
@@ -39,11 +41,15 @@ RULER_TEXT = QColor("#8a8a8a")
 CLIP_BG = QColor("#0c5a60")
 CLIP_BG_SEL = QColor("#11707a")
 WAVE = QColor("#1fb3bf")
+WAVE_QUIET = QColor("#2b6f75")
 LABEL_BG = QColor(0, 0, 0, 90)
 PLAYHEAD = QColor("#f2f2f2")
 SNAP_LINE = QColor("#ffd23f")
 SILENCE = QColor(255, 80, 60, 110)
 SPLIT_LINE = QColor("#ff5a4a")
+THRESHOLD = QColor("#ffa62b")
+THRESHOLD_GRAB_PX = 6
+THRESHOLD_RANGE = (-70.0, -5.0)
 
 
 @dataclass
@@ -59,6 +65,7 @@ class TimelineWidget(QWidget):
     playheadChanged = Signal(int)
     selectionChanged = Signal()
     toolChanged = Signal(str)
+    thresholdDragged = Signal(float)  # nouveau seuil (dB) choisi à la souris
 
     def __init__(self, editor: Editor, parent=None):
         super().__init__(parent)
@@ -66,6 +73,7 @@ class TimelineWidget(QWidget):
         self.pps = 60.0             # pixels par seconde (zoom)
         self.tool = "select"        # select | split
         self.preview: dict[str, list[Interval]] = {}  # silences à mettre en évidence
+        self.threshold_db: float | None = None  # barre de seuil (None = masquée)
         self._drag: dict | None = None
         self._hover_x: float | None = None
         self._snap_x: float | None = None
@@ -97,6 +105,26 @@ class TimelineWidget(QWidget):
         x0, x1 = self.x_of(clip.start), self.x_of(clip.end)
         return QRectF(x0, row.top(), max(1.0, x1 - x0), TRACK_H)
 
+    @staticmethod
+    def wave_area(row: QRectF) -> tuple[float, float]:
+        """(bas, hauteur) de la zone de forme d'onde dans une ligne de piste."""
+        top = row.top() + CLIP_HEADER_H + 2
+        bottom = row.bottom() - 2
+        return bottom, bottom - top
+
+    def threshold_y(self) -> float | None:
+        if self.threshold_db is None:
+            return None
+        base, height = self.wave_area(self.track_rect(self._main_index()))
+        return base - float(db_to_display(self.threshold_db)) * height
+
+    def _main_index(self) -> int:
+        return self.timeline.tracks.index(self.timeline.main_track)
+
+    def set_threshold_line(self, db: float | None) -> None:
+        self.threshold_db = db
+        self.update()
+
     def update_size(self) -> None:
         width = int(self.x_of(self.timeline.duration) + 400)
         height = int(self.track_rect(len(self.timeline.tracks)).top() + 20)
@@ -123,9 +151,34 @@ class TimelineWidget(QWidget):
             for clip in track.clips:
                 rect = self.clip_rect(i, clip)
                 if rect.right() >= visible.left() and rect.left() <= visible.right():
-                    self._paint_clip(p, rect, clip, visible)
+                    self._paint_clip(p, rect, clip, visible, track is self.timeline.main_track)
+        self._paint_threshold(p, visible)
         self._paint_overlays(p)
         p.end()
+
+    def _paint_threshold(self, p: QPainter, visible: QRectF) -> None:
+        y = self.threshold_y()
+        if y is None:
+            return
+        track = self.timeline.main_track
+        x0 = max(self.x_of(0), visible.left())
+        x1 = min(self.x_of(track.end), visible.right())
+        if x1 > x0:
+            p.setPen(QPen(THRESHOLD, 2))
+            p.drawLine(QLineF(x0, y, x1, y))
+        # Étiquette accrochée au bord gauche visible, comme une poignée
+        text = f"Seuil {self.threshold_db:.1f} dB"
+        p.setFont(QFont(self.font().family(), 8, QFont.Bold))
+        tw = p.fontMetrics().horizontalAdvance(text) + 14
+        lx = max(self.x_of(0), visible.left()) + 4
+        row = self.track_rect(self._main_index())
+        ly = row.top() - 20
+        p.setBrush(THRESHOLD)
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(QRectF(lx, ly, tw, 17), 4, 4)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QColor("#1a1a1a"))
+        p.drawText(QRectF(lx, ly, tw, 17), Qt.AlignCenter, text)
 
     def _ruler_step(self) -> tuple[float, int]:
         """Pas des graduations : (secondes entre libellés, sous-divisions)."""
@@ -152,14 +205,14 @@ class TimelineWidget(QWidget):
                 p.drawLine(QLineF(xs, RULER_H - 11, xs, RULER_H - 6))
             t += step
 
-    def _paint_clip(self, p: QPainter, rect: QRectF, clip: Clip, visible: QRectF) -> None:
+    def _paint_clip(self, p: QPainter, rect: QRectF, clip: Clip, visible: QRectF, on_main: bool) -> None:
         selected = clip.id in self.editor.selection
         p.fillRect(rect, CLIP_BG_SEL if selected else CLIP_BG)
         source = self.timeline.sources.get(clip.source_id)
 
         # Forme d'onde : barres depuis le bas, uniquement sur la partie visible.
-        wave_top = rect.top() + CLIP_HEADER_H + 2
-        wave_h = rect.bottom() - wave_top - 2
+        base, wave_h = self.wave_area(rect)
+        wave_top = base - wave_h
         x0 = max(rect.left(), visible.left())
         x1 = min(rect.right(), visible.right())
         if source is not None and source.peaks is not None and x1 - x0 >= 1:
@@ -169,11 +222,18 @@ class TimelineWidget(QWidget):
             idx = np.clip((src * source.peaks_rate / US_PER_SECOND).astype(np.int64), 0, len(peaks) - 1)
             # max des pics couverts par chaque pixel (1 pic si zoom fort)
             values = np.maximum.reduceat(peaks[: idx[-1] + 1], idx[:-1]) if len(peaks) else np.zeros(n)
+            # Sous la barre de seuil, les barres sont estompées : c'est ce qui sera coupé.
+            limit = float(db_to_display(self.threshold_db)) if on_main and self.threshold_db is not None else -1
+            loud, quiet = [], []
+            for k, v in enumerate(values):
+                if v > 0.01:
+                    line = QLineF(x0 + k + 0.5, base, x0 + k + 0.5, base - v * wave_h)
+                    (loud if v >= limit else quiet).append(line)
             p.setPen(QPen(WAVE, 1))
-            base = rect.bottom() - 2
-            lines = [QLineF(x0 + k + 0.5, base, x0 + k + 0.5, base - v * wave_h)
-                     for k, v in enumerate(values) if v > 0.01]
-            p.drawLines(lines)
+            p.drawLines(loud)
+            if quiet:
+                p.setPen(QPen(WAVE_QUIET, 1))
+                p.drawLines(quiet)
             p.setPen(QPen(QColor(255, 255, 255, 50), 1))
             mid = wave_top + wave_h * 0.55
             p.drawLine(QLineF(x0, mid, x1, mid))
@@ -236,6 +296,10 @@ class TimelineWidget(QWidget):
     def hit(self, pos: QPointF) -> Hit:
         if pos.y() < RULER_H + TOP_GAP / 2:
             return Hit("ruler")
+        y = self.threshold_y()
+        if y is not None and abs(pos.y() - y) <= THRESHOLD_GRAB_PX \
+                and self.x_of(0) <= pos.x() <= self.x_of(self.timeline.main_track.end):
+            return Hit("threshold", self.timeline.main_track)
         for i, track in enumerate(self.timeline.tracks):
             row = self.track_rect(i)
             if not (row.top() <= pos.y() <= row.bottom()):
@@ -260,6 +324,8 @@ class TimelineWidget(QWidget):
     def _update_cursor(self, hit: Hit | None) -> None:
         if self.tool == "split":
             self.setCursor(self._scissors_cursor)
+        elif hit and hit.kind == "threshold":
+            self.setCursor(Qt.SizeVerCursor)
         elif hit and hit.kind == "junction":
             self.setCursor(Qt.SplitHCursor)       # curseur spécial du roll edit
         elif hit and hit.kind in ("edge_left", "edge_right"):
@@ -298,6 +364,11 @@ class TimelineWidget(QWidget):
         if hit.kind == "ruler":
             self._set_playhead(self._snap(max(0, t), with_playhead=False))
             self._drag = {"kind": "playhead"}
+            return
+
+        if hit.kind == "threshold":
+            self._drag = {"kind": "threshold"}
+            self._drag_threshold(pos.y())
             return
 
         if self.tool == "split":
@@ -361,6 +432,9 @@ class TimelineWidget(QWidget):
         if d["kind"] == "playhead":
             self._set_playhead(self._snap(max(0, t), with_playhead=False))
             return
+        if d["kind"] == "threshold":
+            self._drag_threshold(pos.y())
+            return
 
         delta = t - d["press_t"]
         if abs(delta) < self.px_to_us(2) and not d["moved"]:
@@ -393,7 +467,7 @@ class TimelineWidget(QWidget):
     def mouseReleaseEvent(self, e):
         d, self._drag = self._drag, None
         self._snap_x = None
-        if d and d["kind"] != "playhead":
+        if d and d["kind"] not in ("playhead", "threshold"):
             self.editor.end_gesture()
             self.changed.emit()
         self.update()
@@ -409,6 +483,14 @@ class TimelineWidget(QWidget):
             e.accept()
         else:
             super().wheelEvent(e)
+
+    def _drag_threshold(self, y: float) -> None:
+        base, height = self.wave_area(self.track_rect(self._main_index()))
+        db = display_to_db((base - y) / height)
+        db = round(max(THRESHOLD_RANGE[0], min(THRESHOLD_RANGE[1], db)) * 2) / 2
+        self.threshold_db = db
+        self.thresholdDragged.emit(db)
+        self.update()
 
     def _set_playhead(self, t: int) -> None:
         self.timeline.playhead = t

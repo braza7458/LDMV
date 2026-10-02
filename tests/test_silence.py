@@ -50,3 +50,11 @@ def test_subtract():
     assert subtract((0, 100), [(10, 20), (50, 60)]) == [(0, 10), (20, 50), (60, 100)]
     assert subtract((30, 55), [(10, 40), (50, 60)]) == [(40, 50)]
     assert subtract((0, 10), [(0, 10)]) == []
+
+
+def test_display_scale_matches_threshold():
+    from ldmv.core.silence import DB_FLOOR, db_to_display, display_to_db
+    assert float(db_to_display(DB_FLOOR)) == 0.0
+    assert float(db_to_display(0)) == 1.0
+    for db in (-60.0, -40.0, -12.5):
+        assert abs(display_to_db(float(db_to_display(db))) - db) < 1e-4

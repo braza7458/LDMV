@@ -52,6 +52,21 @@ def levels_db(samples: np.ndarray, sample_rate: int, window_ms: int = 20) -> tup
     return (20.0 * np.log10(np.maximum(rms, 1e-10))).astype(np.float32), hop
 
 
+# Échelle d'affichage de la forme d'onde : DB_FLOOR dB en bas, 0 dB en haut.
+# La forme d'onde est dessinée à partir des mêmes niveaux que la détection :
+# ce qui est sous la barre de seuil à l'écran est exactement ce qui est coupé.
+DB_FLOOR = -70.0
+
+
+def db_to_display(db):
+    """dB -> hauteur 0..1 dans la piste (accepte un scalaire ou un tableau)."""
+    return np.clip((np.asarray(db, dtype=np.float32) - DB_FLOOR) / -DB_FLOOR, 0.0, 1.0)
+
+
+def display_to_db(value: float) -> float:
+    return DB_FLOOR + float(value) * -DB_FLOOR
+
+
 def _runs(mask: np.ndarray) -> list[tuple[int, int, bool]]:
     """Plages consécutives d'un masque booléen : [(début, fin_exclue, valeur)]."""
     if len(mask) == 0:

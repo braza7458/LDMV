@@ -14,7 +14,6 @@ from ldmv.core.model import Clip, MediaSource, Timeline, Track
 from ldmv.core.timecode import US_PER_SECOND
 
 ANALYSIS_RATE = 16_000  # Hz : largement suffisant pour détecter la parole
-PEAKS_RATE = 100        # valeurs de forme d'onde par seconde
 
 
 class FFmpegError(RuntimeError):
@@ -73,18 +72,6 @@ def load_audio(path: str, sample_rate: int = ANALYSIS_RATE) -> np.ndarray:
     if out.returncode != 0:
         raise FFmpegError(out.stderr.decode(errors="replace").strip())
     return np.frombuffer(out.stdout, dtype=np.float32)
-
-
-def compute_peaks(samples: np.ndarray, sample_rate: int, rate: int = PEAKS_RATE) -> np.ndarray:
-    """Forme d'onde réduite pour l'affichage : niveau 0..1 sur une échelle en dB
-    (-60 dB -> 0), ce qui rend la parole lisible comme dans CapCut."""
-    hop = max(1, sample_rate // rate)
-    n = -(-len(samples) // hop)
-    padded = np.zeros(n * hop, dtype=np.float32)
-    padded[: len(samples)] = np.abs(samples)
-    peak = padded.reshape(n, hop).max(axis=1) if n else np.zeros(0, dtype=np.float32)
-    db = 20 * np.log10(np.maximum(peak, 1e-6))
-    return np.clip((db + 60) / 60, 0, 1).astype(np.float32)
 
 
 # --------------------------------------------------------------------------

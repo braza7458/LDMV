@@ -41,9 +41,9 @@ class MediaSource:
     height: int = 0
     fps: float = 30.0
     id: str = field(default_factory=lambda: new_id("s"))
-    # Pics de forme d'onde normalisés 0..1, `peaks_rate` valeurs par seconde.
+    # Forme d'onde : niveaux 0..1 (voir silence.db_to_display), `peaks_rate` par seconde.
     peaks: object = field(default=None, repr=False, compare=False)
-    peaks_rate: int = 100
+    peaks_rate: float = 50.0
 
     @property
     def name(self) -> str:

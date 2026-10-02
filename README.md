@@ -68,9 +68,16 @@ ldmv-silence cours.mp4 --dry-run   # liste seulement les silences détectés
 `Editor.remove_silences` (`ldmv/core/edits.py`) coupe au début et à la fin de
 chaque silence puis supprime tous les segments **en une seule opération** :
 un seul Ctrl+Z restaure tout. Avec l'aimant activé, les clips restants sont
-recollés. Dans l'interface, les zones qui seront supprimées s'affichent en
-rouge en direct pendant que vous réglez le seuil : l'analyse audio est faite
-une fois à l'import, le réglage est ensuite instantané, même sur 30 minutes.
+recollés.
+
+**Dans l'interface** : cliquez sur l'icône des silences (Ctrl+Maj+S). Une
+**barre orange** apparaît sur la piste audio : faites-la monter ou descendre
+à la souris. Tout ce qui reste sous la barre est coupé. Les barres de la forme
+d'onde situées sous le seuil s'estompent et les zones qui seront supprimées
+passent en rouge, en direct. La forme d'onde est dessinée avec la même mesure
+que la détection (RMS en dB), donc ce que vous voyez est exactement ce qui est
+coupé, aux réglages « Durée min. » et « Marge » près. Cliquez ensuite sur
+« Couper tous les silences ».
 
 ### 2. Barre d'outils et magnétisme — `ldmv/ui/main_window.py`, `ldmv/ui/timeline_widget.py`
 

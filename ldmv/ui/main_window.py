@@ -12,12 +12,12 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, Q
                                QSlider, QSplitter, QToolButton, QVBoxLayout, QWidget)
 
 from ldmv.core.edits import Editor
-from ldmv.core.silence import levels_db
+from ldmv.core.silence import db_to_display, levels_db, subtract, total_duration
 from ldmv.core.timecode import US_PER_SECOND, format_timecode, frame_duration
 from ldmv.media import ffmpeg
 from ldmv.ui import icons
 from ldmv.ui.player import TimelinePlayer
-from ldmv.ui.silence_dialog import SilenceDialog
+from ldmv.ui.silence_panel import SilencePanel
 from ldmv.ui.timeline_widget import TimelineWidget
 
 MEDIA_FILTER = "Médias (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mp3 *.wav *.m4a *.aac *.flac *.ogg);;Tous (*)"
@@ -52,9 +52,9 @@ def analyse_media(path: str):
     analysis = None
     if source.has_audio:
         samples = ffmpeg.load_audio(path)
-        source.peaks = ffmpeg.compute_peaks(samples, ffmpeg.ANALYSIS_RATE)
-        source.peaks_rate = ffmpeg.PEAKS_RATE
         db, hop = levels_db(samples, ffmpeg.ANALYSIS_RATE, 20)
+        source.peaks = db_to_display(db)
+        source.peaks_rate = ffmpeg.ANALYSIS_RATE / hop
         analysis = (db, hop, ffmpeg.ANALYSIS_RATE, len(samples))
     return source, analysis
 
@@ -98,6 +98,13 @@ class MainWindow(QMainWindow):
         tv.playheadChanged.connect(self._on_user_seek)
         tv.selectionChanged.connect(self._refresh_actions)
         tv.toolChanged.connect(self._on_tool)
+        tv.thresholdDragged.connect(self.silence_panel.set_threshold)
+
+        sp = self.silence_panel
+        sp.thresholdChanged.connect(tv.set_threshold_line)
+        sp.previewChanged.connect(self._set_silence_preview)
+        sp.applyRequested.connect(self._apply_silences)
+        sp.closeRequested.connect(lambda: self.toggle_silence_mode(False))
 
         self._frame_timer = QTimer(self, singleShot=True, interval=80)
         self._frame_timer.timeout.connect(self._request_frame)
@@ -149,8 +156,9 @@ class MainWindow(QMainWindow):
         self.act_align = self._action("Alignement automatique", self.toggle_align, "S",
                                       icons.align_icon(), True)
         self.act_align.setChecked(self.editor.timeline.auto_align)
-        self.act_silence = self._action("Supprimer les silences…", self.remove_silences, "Ctrl+Shift+S",
-                                        icons.silence_icon())
+        self.act_silence = self._action("Supprimer les silences", self.toggle_silence_mode, "Ctrl+Shift+S",
+                                        icons.silence_icon(), True,
+                                        "Supprimer les silences : glissez la barre orange sur la piste")
 
         self.act_zoom_in = self._action("Zoom avant", lambda: self._zoom(1.4), ["Ctrl+=", "Ctrl++"],
                                         icons.zoom_in_icon())
@@ -257,6 +265,9 @@ class MainWindow(QMainWindow):
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(0)
         tl.addWidget(bar_widget)
+        self.silence_panel = SilencePanel()
+        self.silence_panel.hide()
+        tl.addWidget(self.silence_panel)
         tl.addWidget(self.scroll, 1)
 
         main = QSplitter(Qt.Vertical)
@@ -398,25 +409,46 @@ class MainWindow(QMainWindow):
     def toggle_align(self, checked: bool):
         self.editor.timeline.auto_align = checked
 
-    def remove_silences(self):
+    def toggle_silence_mode(self, checked: bool):
+        """Affiche / masque la barre de seuil et le panneau des silences."""
+        if not checked:
+            self.silence_panel.hide()
+            self.act_silence.setChecked(False)
+            self.timeline_view.set_threshold_line(None)
+            self._set_silence_preview({})
+            return
         tl = self.editor.timeline
         ids = {c.source_id for c in tl.main_track.clips}
         analyses = {sid: a for sid, a in self.analyses.items() if sid in ids}
         if not analyses:
+            self.act_silence.setChecked(False)
             QMessageBox.information(self, "Silences", "Aucun clip avec de l'audio sur la piste principale.")
             return
+        self.act_silence.setChecked(True)
+        self.silence_panel.open(analyses, tl.magnet, self._measure_silences)
+
+    def _measure_silences(self, silences: dict) -> str:
+        """Résumé de ce qui sera retiré, limité aux parties présentes sur la timeline."""
+        tl = self.editor.timeline
+        count = removed = 0
+        for clip in tl.main_track.clips:
+            holes = silences.get(clip.source_id, [])
+            kept = subtract((clip.source_in, clip.source_out), holes)
+            removed += clip.duration - total_duration(kept)
+            count += sum(1 for a, b in holes if a < clip.source_out and b > clip.source_in)
         total = sum(c.duration for c in tl.main_track.clips)
-        dlg = SilenceDialog(analyses, tl.magnet, total, tl.fps, self)
-        dlg.previewChanged.connect(self._set_silence_preview)
-        dlg.recompute()
-        accepted = dlg.exec()
-        self._set_silence_preview({})
-        if not accepted:
-            return
-        report = self.editor.remove_silences(dlg.result_silences, ripple=dlg.ripple.isChecked())
+        pct = 100 * removed / total if total else 0
+        plural = "s" if count > 1 else ""
+        return f"{count} silence{plural} — {format_timecode(removed, tl.fps)} à retirer ({pct:.0f} %)"
+
+    def _apply_silences(self):
+        tl = self.editor.timeline
+        panel = self.silence_panel
+        report = self.editor.remove_silences(panel.result_silences, ripple=panel.ripple.isChecked())
+        self.toggle_silence_mode(False)
         self._on_changed()
         self.statusBar().showMessage(
-            f"{report.cuts} silences supprimés ({format_timecode(report.removed_duration, tl.fps)}) — "
+            f"{report.cuts} silence(s) supprimé(s) ({format_timecode(report.removed_duration, tl.fps)}) — "
             f"{report.clips_before} → {report.clips_after} clips. Ctrl+Z pour annuler.", 10000)
 
     def _set_silence_preview(self, silences: dict):
@@ -457,6 +489,8 @@ class MainWindow(QMainWindow):
     # -- rafraîchissement ---------------------------------------------------------------
     def _on_changed(self):
         self.player.pause()  # toute modification de la timeline arrête la lecture
+        if self.silence_panel.isVisible():
+            self.silence_panel.recompute()
         self.timeline_view.update_size()
         self._refresh_actions()
         self._on_playhead(self.editor.timeline.playhead)
