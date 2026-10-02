@@ -41,6 +41,7 @@ ldmv-silence cours.mp4 --dry-run   # liste seulement les silences détectés
 
 | Touche | Action |
 |---|---|
+| **Espace** | Lecture / Pause (saute les passages coupés) |
 | **B** | Outil Ciseau (clic sur un clip = coupe) |
 | A / V | Outil Sélection |
 | Ctrl+B | Diviser à la tête de lecture |
@@ -115,7 +116,7 @@ ldmv/
     edits.py       ciseau, suppression, déplacement, rognage, roll edit, silences, historique
     timecode.py    temps en microsecondes entières (pas d'erreur d'arrondi)
   media/ffmpeg.py  sonde, décodage audio, forme d'onde, export
-  ui/              PySide6 : fenêtre, timeline, dialogue des silences, icônes
+  ui/              PySide6 : fenêtre, timeline, lecteur, dialogue des silences, icônes
   cli.py           ldmv-silence
 tests/             pytest
 ```
@@ -131,6 +132,7 @@ pytest
 
 ## Limites actuelles
 
-- Pas de lecture vidéo en temps réel : l'aperçu affiche l'image à la tête de lecture.
+- À chaque coupe, la lecture saute dans le fichier : une micro-coupure du son est possible ;
+  l'export, lui, est parfaitement continu.
 - L'export ne rend que la piste principale ; les vides (aimant désactivé) sont ignorés.
 - Pas encore de sauvegarde de projet.

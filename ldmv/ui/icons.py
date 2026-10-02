@@ -122,3 +122,30 @@ def zoom_out_icon(): return _icon(_zoom("-"))
 
 def scissors_cursor_pixmap() -> QPixmap:
     return _make(_scissors, "#ffffff").scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
+def _play(p: QPainter, c: QColor):
+    path = QPainterPath(QPointF(6, 4))
+    path.lineTo(16, 10)
+    path.lineTo(6, 16)
+    path.closeSubpath()
+    p.fillPath(path, c)
+
+
+def _pause(p: QPainter, c: QColor):
+    p.fillRect(QRectF(5.5, 4, 3, 12), c)
+    p.fillRect(QRectF(11.5, 4, 3, 12), c)
+
+
+def _to_start(p: QPainter, c: QColor):
+    p.fillRect(QRectF(4.5, 4, 2, 12), c)
+    path = QPainterPath(QPointF(15, 4))
+    path.lineTo(7.5, 10)
+    path.lineTo(15, 16)
+    path.closeSubpath()
+    p.fillPath(path, c)
+
+
+def play_icon(): return _icon(_play, normal="#ffffff")
+def pause_icon(): return _icon(_pause, normal="#ffffff")
+def to_start_icon(): return _icon(_to_start)

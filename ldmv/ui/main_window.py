@@ -16,6 +16,7 @@ from ldmv.core.silence import levels_db
 from ldmv.core.timecode import US_PER_SECOND, format_timecode, frame_duration
 from ldmv.media import ffmpeg
 from ldmv.ui import icons
+from ldmv.ui.player import TimelinePlayer
 from ldmv.ui.silence_dialog import SilenceDialog
 from ldmv.ui.timeline_widget import TimelineWidget
 
@@ -84,13 +85,17 @@ class MainWindow(QMainWindow):
         self._frame_request = 0
 
         self.timeline_view = TimelineWidget(self.editor)
+        self.player = TimelinePlayer(self.editor, self)
+        self.player.positionChanged.connect(self._on_play_position)
+        self.player.playingChanged.connect(self._on_playing)
+        self.player.frameReady.connect(self._show_image)
         self._build_actions()
         self._build_ui()
         self._build_menus()
 
         tv = self.timeline_view
         tv.changed.connect(self._on_changed)
-        tv.playheadChanged.connect(self._on_playhead)
+        tv.playheadChanged.connect(self._on_user_seek)
         tv.selectionChanged.connect(self._refresh_actions)
         tv.toolChanged.connect(self._on_tool)
 
@@ -158,7 +163,10 @@ class MainWindow(QMainWindow):
         self._action("Image suivante", lambda: self._step(frame()), "Right")
         self._action("Reculer 1 s", lambda: self._step(-US_PER_SECOND), "Shift+Left")
         self._action("Avancer 1 s", lambda: self._step(US_PER_SECOND), "Shift+Right")
-        self._action("Début", lambda: self._seek(0), "Home")
+        self.act_play = self._action("Lecture", self.player.toggle, "Space", icons.play_icon(),
+                                     tip="Lecture / Pause")
+        self.act_to_start = self._action("Début", lambda: self._seek(0), "Home", icons.to_start_icon(),
+                                         tip="Revenir au début")
         self._action("Fin", lambda: self._seek(self.editor.timeline.duration), "End")
 
     def _tool_button(self, action) -> QToolButton:
@@ -193,13 +201,21 @@ class MainWindow(QMainWindow):
         self.preview.setMinimumSize(320, 180)
         self.preview.setStyleSheet("background: #000; color: #777;")
         self.timecode = QLabel("00:00:00:00")
-        self.timecode.setAlignment(Qt.AlignCenter)
         self.timecode.setStyleSheet("font-family: monospace; color: #22d3ee;")
+        self.play_btn = self._tool_button(self.act_play)
+        self.play_btn.setIconSize(QSize(28, 28))
+        controls = QHBoxLayout()
+        controls.addWidget(self.timecode)
+        controls.addStretch(1)
+        controls.addWidget(self._tool_button(self.act_to_start))
+        controls.addWidget(self.play_btn)
+        controls.addStretch(1)
+        controls.addSpacing(self.timecode.sizeHint().width() + 120)
         preview_panel = QWidget()
         pl = QVBoxLayout(preview_panel)
         pl.setContentsMargins(8, 8, 8, 8)
         pl.addWidget(self.preview, 1)
-        pl.addWidget(self.timecode)
+        pl.addLayout(controls)
 
         top = QSplitter(Qt.Horizontal)
         top.addWidget(bin_panel)
@@ -412,6 +428,7 @@ class MainWindow(QMainWindow):
         self._seek(self.editor.timeline.playhead + delta)
 
     def _seek(self, t: int):
+        self.player.pause()
         self.editor.timeline.playhead = max(0, t)
         self._on_playhead(self.editor.timeline.playhead)
         self.timeline_view.update()
@@ -439,6 +456,7 @@ class MainWindow(QMainWindow):
 
     # -- rafraîchissement ---------------------------------------------------------------
     def _on_changed(self):
+        self.player.pause()  # toute modification de la timeline arrête la lecture
         self.timeline_view.update_size()
         self._refresh_actions()
         self._on_playhead(self.editor.timeline.playhead)
@@ -455,7 +473,33 @@ class MainWindow(QMainWindow):
     def _on_playhead(self, t: int):
         self.timecode.setText(f"{format_timecode(t, self.editor.timeline.fps)} / "
                               f"{format_timecode(self.editor.timeline.duration, self.editor.timeline.fps)}")
-        self._frame_timer.start()
+        if not self.player.playing:
+            self._frame_timer.start()
+
+    # -- lecture -----------------------------------------------------------------------
+    def _on_user_seek(self, t: int):
+        self.player.pause()
+        self._on_playhead(t)
+
+    def _on_play_position(self, t: int):
+        self._on_playhead(t)
+        self.timeline_view.update()
+        # La timeline défile pour garder la tête de lecture visible.
+        bar = self.scroll.horizontalScrollBar()
+        x = int(self.timeline_view.x_of(t))
+        width = self.scroll.viewport().width()
+        if x < bar.value() or x > bar.value() + width - 40:
+            bar.setValue(x - 40)
+
+    def _on_playing(self, playing: bool):
+        self.act_play.setIcon(icons.pause_icon() if playing else icons.play_icon())
+        self.act_play.setText("Pause" if playing else "Lecture")
+        if playing:
+            self._frame_timer.stop()
+
+    def _show_image(self, image):
+        self.preview.setPixmap(QPixmap.fromImage(image).scaled(
+            self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     # -- aperçu image ------------------------------------------------------------------
     def _request_frame(self):
@@ -479,6 +523,8 @@ class MainWindow(QMainWindow):
         request_id, data = result
         if request_id != self._frame_request or not data:
             return  # réponse périmée
+        if self.player.playing:
+            return
         pm = QPixmap()
         pm.loadFromData(data, "PNG")
         self.preview.setPixmap(pm.scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
