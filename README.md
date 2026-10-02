@@ -4,9 +4,23 @@ Logiciel de montage inspiré de CapCut, en Python (PySide6 + ffmpeg), avec ce
 que CapCut ne sait pas faire : **supprimer tous les silences d'une piste en
 une seule opération**.
 
-## Installation
+## Démarrage rapide (sans terminal)
 
-Prérequis : Python ≥ 3.10 et [ffmpeg](https://ffmpeg.org/download.html) dans le PATH.
+Seul [Python](https://www.python.org/downloads/) ≥ 3.10 est nécessaire
+(sous Windows, cochez « Add Python to PATH » pendant son installation).
+ffmpeg est installé automatiquement.
+
+1. Sur GitHub, bouton vert **Code** → **Download ZIP**, puis décompressez le dossier.
+2. Double-cliquez sur :
+   - **Windows** : `Lancer LDMV (Windows).bat`
+   - **Mac** : `Lancer LDMV (Mac-Linux).command`
+     (si macOS le bloque : clic droit → **Ouvrir** → **Ouvrir**)
+3. La première fois, l'installation prend quelques minutes, puis le logiciel s'ouvre.
+   Les fois suivantes, il s'ouvre directement.
+
+Astuce Windows : glissez une vidéo sur le fichier `.bat` pour l'ouvrir directement.
+
+## Installation pour développeurs
 
 ```bash
 pip install -e ".[ui,dev]"

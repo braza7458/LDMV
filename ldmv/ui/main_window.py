@@ -60,7 +60,7 @@ def analyse_media(path: str):
 
 def grab_frame(path: str, t_us: int, request_id: int):
     out = subprocess.run(
-        ["ffmpeg", "-v", "error", "-ss", f"{t_us / US_PER_SECOND:.3f}", "-i", path,
+        [ffmpeg.ffmpeg_exe(), "-v", "error", "-ss", f"{t_us / US_PER_SECOND:.3f}", "-i", path,
          "-frames:v", "1", "-vf", "scale=640:-2", "-f", "image2pipe", "-vcodec", "png", "-"],
         capture_output=True,
     )

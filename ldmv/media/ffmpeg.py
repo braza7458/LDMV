@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import re
 import os
 import shutil
 import subprocess
@@ -21,44 +21,52 @@ class FFmpegError(RuntimeError):
     pass
 
 
-def _require(tool: str) -> str:
-    path = shutil.which(tool)
-    if not path:
-        raise FFmpegError(f"{tool} introuvable : installez ffmpeg et ajoutez-le au PATH")
-    return path
+def ffmpeg_exe() -> str:
+    """ffmpeg du système s'il existe, sinon celui fourni par le paquet pip
+    `imageio-ffmpeg` : l'utilisateur n'a rien à installer à la main."""
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        raise FFmpegError("ffmpeg introuvable : lancez `pip install imageio-ffmpeg` ou installez ffmpeg")
+
+
+_DURATION = re.compile(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)")
+_VIDEO = re.compile(r"Stream #.*?Video:.*?(\d{2,5})x(\d{2,5})")
+_FPS = re.compile(r"Stream #.*?Video:.*?([\d.]+) fps")
+_AUDIO = re.compile(r"Stream #.*?Audio:")
 
 
 def probe(path: str) -> MediaSource:
-    out = subprocess.run(
-        [_require("ffprobe"), "-v", "error", "-show_entries",
-         "format=duration:stream=codec_type,width,height,avg_frame_rate",
-         "-of", "json", path],
-        capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        raise FFmpegError(out.stderr.strip() or f"Impossible de lire {path}")
-    info = json.loads(out.stdout)
-    streams = info.get("streams", [])
-    video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    fps = 30.0
-    if video and video.get("avg_frame_rate", "0/0") != "0/0":
-        num, den = video["avg_frame_rate"].split("/")
-        fps = float(num) / float(den) if float(den) else 30.0
+    """Lit durée et flux en analysant la sortie de `ffmpeg -i` (ffprobe n'est
+    pas fourni par imageio-ffmpeg)."""
+    out = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path],
+                         capture_output=True, text=True, errors="replace")
+    info = out.stderr
+    duration = _DURATION.search(info)
+    if not duration:
+        raise FFmpegError(info.strip().splitlines()[-1] if info.strip() else f"Impossible de lire {path}")
+    h, m, s = duration.groups()
+    video = _VIDEO.search(info)
+    fps = _FPS.search(info)
     return MediaSource(
         path=path,
-        duration=round(float(info["format"]["duration"]) * US_PER_SECOND),
+        duration=round((int(h) * 3600 + int(m) * 60 + float(s)) * US_PER_SECOND),
         has_video=video is not None,
-        has_audio=any(s.get("codec_type") == "audio" for s in streams),
-        width=int(video.get("width", 0)) if video else 0,
-        height=int(video.get("height", 0)) if video else 0,
-        fps=fps,
+        has_audio=_AUDIO.search(info) is not None,
+        width=int(video.group(1)) if video else 0,
+        height=int(video.group(2)) if video else 0,
+        fps=float(fps.group(1)) if fps else 30.0,
     )
 
 
 def load_audio(path: str, sample_rate: int = ANALYSIS_RATE) -> np.ndarray:
     """Piste audio décodée en mono float32 [-1, 1]."""
     out = subprocess.run(
-        [_require("ffmpeg"), "-v", "error", "-i", path, "-vn", "-ac", "1",
+        [ffmpeg_exe(), "-v", "error", "-i", path, "-vn", "-ac", "1",
          "-ar", str(sample_rate), "-f", "f32le", "-"],
         capture_output=True,
     )
@@ -120,7 +128,7 @@ def build_export_command(timeline: Timeline, output: str, track: Track | None = 
     lines.append(f"{pads}concat=n={len(clips)}:v={int(has_video)}:a={int(has_audio)}{outs}")
     script = ";\n".join(lines)
 
-    args = [_require("ffmpeg"), "-y"]
+    args = [ffmpeg_exe(), "-y"]
     for s in sources:
         args += ["-i", s.path]
     args += ["-filter_complex_script", filter_script]
